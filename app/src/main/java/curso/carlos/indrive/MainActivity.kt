@@ -26,7 +26,6 @@ import com.google.android.libraries.places.api.Places
 import com.google.android.libraries.places.api.model.Place
 import com.google.android.libraries.places.widget.AutocompleteSupportFragment
 import com.google.android.libraries.places.widget.listener.PlaceSelectionListener
-import java.util.*
 
 
 class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionListener {
@@ -66,7 +65,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
 
         // Initialize the AutocompleteSupportFragment.
         val autocompleteFragment = supportFragmentManager.findFragmentById(R.id.autocomplete_fragment) as AutocompleteSupportFragment?
-        autocompleteFragment!!.setPlaceFields(Arrays.asList(Place.Field.ID, Place.Field.NAME))
+        autocompleteFragment!!.setPlaceFields(arrayListOf(Place.Field.ID, Place.Field.NAME))
         autocompleteFragment.setOnPlaceSelectedListener(this)
 
     }
