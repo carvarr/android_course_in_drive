@@ -14,6 +14,8 @@ import android.location.LocationManager
 import android.support.v4.app.ActivityCompat
 import android.support.v4.content.ContextCompat
 import android.util.Log
+import android.view.Menu
+import android.view.MenuItem
 import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.SupportMapFragment
 import com.google.android.gms.maps.OnMapReadyCallback
@@ -62,8 +64,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
 
         val currentUser = auth.currentUser
         if (currentUser == null) {
-            val intent = Intent(applicationContext, LoginActivity::class.java)
-            startActivity(intent)
+            redirectToLogin()
             return
         }
 
@@ -170,6 +171,42 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         val polylineOptions = PolylineOptions().addAll(polylines).clickable(true)
         googleMap.addPolyline(polylineOptions)
     }
+
+    /**
+     * redirigir a login
+     */
+    private fun redirectToLogin() {
+        val intent = Intent(applicationContext, LoginActivity::class.java)
+        startActivity(intent)
+    }
+
+    // Menu configuration
+    override fun onCreateOptionsMenu(menu: Menu?): Boolean {
+        val inflater = menuInflater
+        inflater.inflate(R.menu.menu, menu)
+        return true
+    }
+
+    override fun onOptionsItemSelected(item: MenuItem): Boolean = when (item.itemId) {
+        R.id.action_history -> {
+            true
+        }
+        R.id.action_profile -> {
+            true
+        }
+        R.id.action_about -> {
+            true
+        }
+        R.id.action_logout -> {
+            auth.signOut()
+            redirectToLogin()
+            true
+        }
+        else -> {
+            super.onOptionsItemSelected(item)
+        }
+    }
+
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
         when (requestCode) {
