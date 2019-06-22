@@ -13,6 +13,7 @@ import android.location.LocationListener
 import android.location.LocationManager
 import android.support.v4.app.ActivityCompat
 import android.support.v4.content.ContextCompat
+import android.util.Log
 import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.SupportMapFragment
 import com.google.android.gms.maps.OnMapReadyCallback
@@ -22,10 +23,25 @@ import curso.carlos.indrive.gateway.LoginActivity
 import com.google.android.gms.maps.model.MarkerOptions
 import com.google.android.gms.maps.model.LatLng*/
 import com.google.android.gms.common.api.Status
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.MarkerOptions
+import com.google.android.gms.maps.model.PolygonOptions
+import com.google.android.gms.maps.model.PolylineOptions
 import com.google.android.libraries.places.api.Places
 import com.google.android.libraries.places.api.model.Place
 import com.google.android.libraries.places.widget.AutocompleteSupportFragment
 import com.google.android.libraries.places.widget.listener.PlaceSelectionListener
+import com.google.firebase.database.DatabaseReference
+import com.google.firebase.database.FirebaseDatabase
+import curso.carlos.indrive.services.DirectionsService
+import curso.carlos.indrive.services.dto.Direction
+import retrofit2.Call
+import retrofit2.Callback
+import retrofit2.Response
+import retrofit2.Retrofit
+import retrofit2.converter.gson.GsonConverterFactory
+import kotlin.math.log
 
 
 class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionListener {
@@ -33,8 +49,10 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
     private lateinit var locationManager: LocationManager
     private lateinit var locationListener: InDriveLocationListener
     private lateinit var googleMap: GoogleMap
+    private lateinit var database: DatabaseReference
 
     private val REQUEST_ACCESS_PERMISSION = 1
+    private val GOOGLE_BASE_URL = "https://maps.googleapis.com/"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,6 +64,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         if (currentUser == null) {
             val intent = Intent(applicationContext, LoginActivity::class.java)
             startActivity(intent)
+            return
         }
 
         getUserLocation()
@@ -57,15 +76,17 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         }
 
         // Initialize Places.
-        Places.initialize(applicationContext, "AIzaSyBbxzJLd9Qr_D79obguEHsEPd3cAm6jR-k")
+        Places.initialize(applicationContext, "AIzaSyAF7ycjJe_F8sfUiDZVd_8tpMp2C72Mvrs")
 
+        // Firebase reference
+        database = FirebaseDatabase.getInstance().reference
 
         val mapFragment = supportFragmentManager.findFragmentById(R.id.map) as SupportMapFragment?
         mapFragment!!.getMapAsync(this)
 
         // Initialize the AutocompleteSupportFragment.
         val autocompleteFragment = supportFragmentManager.findFragmentById(R.id.autocomplete_fragment) as AutocompleteSupportFragment?
-        autocompleteFragment!!.setPlaceFields(arrayListOf(Place.Field.ID, Place.Field.NAME))
+        autocompleteFragment!!.setPlaceFields(arrayListOf(Place.Field.ID, Place.Field.NAME, Place.Field.LAT_LNG))
         autocompleteFragment.setOnPlaceSelectedListener(this)
 
     }
@@ -98,10 +119,56 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         val lat: Double = latitude ?: 0.0
         val lon: Double = longitude ?: 0.0
 
-        /*val pos = LatLng(lat,lon)
+        val pos = LatLng(lat,lon)
         this.googleMap.addMarker(MarkerOptions().position(pos).title("My position"))
         this.googleMap.moveCamera(CameraUpdateFactory.newLatLng(pos))
-        this.googleMap.setMinZoomPreference(5f)*/
+        this.googleMap.setMinZoomPreference(5f)
+    }
+
+    private fun saveUserRoute(userId: String, route: MapRoute) {
+        database.child("addresess").child("address_$userId").setValue(route)
+    }
+
+    private fun decodePoly(encoded: String): List<LatLng> {
+        val poly = ArrayList<LatLng>()
+        var index = 0
+        val len = encoded.length
+        var lat = 0
+        var lng = 0
+
+        while (index < len) {
+            var b: Int
+            var shift = 0
+            var result = 0
+            do {
+                b = encoded[index++].toInt() - 63
+                result = result or (b and 0x1f shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            val dlat = if (result and 1 != 0) (result shr 1).inv() else result shr 1
+            lat += dlat
+
+            shift = 0
+            result = 0
+            do {
+                b = encoded[index++].toInt() - 63
+                result = result or (b and 0x1f shl shift)
+                shift += 5
+            } while (b >= 0x20)
+            val dlng = if (result and 1 != 0) (result shr 1).inv() else result shr 1
+            lng += dlng
+
+            val p = LatLng(lat.toDouble() / 1E5,
+                lng.toDouble() / 1E5)
+            poly.add(p)
+        }
+
+        return poly
+    }
+
+    private fun connectPolyline(polylines: List<LatLng>) {
+        val polylineOptions = PolylineOptions().addAll(polylines).clickable(true)
+        googleMap.addPolyline(polylineOptions)
     }
 
     override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
@@ -119,15 +186,43 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
 
     override fun onMapReady(googleMap: GoogleMap) {
         this.googleMap = googleMap
-        //reloadMapPosition(locationListener.mylocation?.latitude, locationListener.mylocation?.longitude)
+        reloadMapPosition(locationListener.mylocation?.latitude, locationListener.mylocation?.longitude)
     }
 
     override fun onPlaceSelected(p0: Place) {
-        Toast.makeText(applicationContext,""+p0!!.name+p0!!.latLng,Toast.LENGTH_LONG).show();
+        Toast.makeText(applicationContext,""+p0!!.name+p0!!.latLng,Toast.LENGTH_LONG).show()
+
+        val route = MapRoute()
+        route.origin_lat = locationListener.mylocation?.latitude.toString()
+        route.origin_long = locationListener.mylocation?.longitude.toString()
+        route.destination_lat = p0.latLng!!.latitude.toString()
+        route.destination_long = p0.latLng!!.longitude.toString()
+
+        saveUserRoute(auth.currentUser!!.uid, route)
+
+        val retrofit = Retrofit.Builder()
+            .baseUrl(GOOGLE_BASE_URL)
+            .addConverterFactory(GsonConverterFactory.create())
+            .build()
+
+        val service = retrofit.create(DirectionsService::class.java)
+        val call = service.getDirection("${route.origin_lat},${route.origin_long}", "${route.destination_lat}, ${route.destination_long}")
+        call.enqueue(object: Callback<Direction> {
+            override fun onResponse(call: Call<Direction>, response: Response<Direction>) {
+                if(response.code() == 200){
+                    val polylineDecoded = decodePoly(response.body()!!.routes[0].polyline.points)
+                    connectPolyline(polylineDecoded)
+                }
+            }
+
+            override fun onFailure(call: Call<Direction>, t: Throwable) {
+                Toast.makeText(applicationContext,"Failed Load Direction",Toast.LENGTH_LONG).show()
+            }
+        })
     }
 
     override fun onError(status: Status) {
-        Toast.makeText(applicationContext,""+status.toString(),Toast.LENGTH_LONG).show();
+        Toast.makeText(applicationContext,""+status.toString(),Toast.LENGTH_LONG).show()
     }
 
     inner class InDriveLocationListener : LocationListener {
@@ -148,6 +243,13 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         override fun onProviderEnabled(p0: String?) {}
 
         override fun onProviderDisabled(p0: String?) {}
+    }
+
+    inner class MapRoute {
+        var destination_lat: String = ""
+        var destination_long: String = ""
+        var origin_lat: String = ""
+        var origin_long: String = ""
     }
 
 }
