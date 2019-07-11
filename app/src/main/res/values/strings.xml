@@ -22,4 +22,7 @@
     <string name="action_profile">Mi perfil</string>
     <string name="action_about">Acerca de..</string>
     <string name="action_logout">Salir</string>
+    <string name="service_mount">Imgrese la cantidad de oferta</string>
+    <string name="save">Guardar</string>
+    <string name="cancel">Cancelar</string>
 </resources>
