@@ -6,6 +6,8 @@ import android.content.Context
 import android.content.DialogInterface
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
+import android.graphics.Canvas
 import android.support.v7.app.AppCompatActivity
 import android.os.Bundle
 import android.widget.Button
@@ -26,16 +28,15 @@ import com.google.firebase.auth.FirebaseAuth
 import curso.carlos.indrive.gateway.LoginActivity
 import com.google.android.gms.common.api.Status
 import com.google.android.gms.maps.CameraUpdateFactory
-import com.google.android.gms.maps.model.LatLng
-import com.google.android.gms.maps.model.MarkerOptions
-import com.google.android.gms.maps.model.PolylineOptions
+import com.google.android.gms.maps.model.*
 import com.google.android.libraries.places.api.Places
 import com.google.android.libraries.places.api.model.Place
 import com.google.android.libraries.places.widget.AutocompleteSupportFragment
 import com.google.android.libraries.places.widget.listener.PlaceSelectionListener
-import com.google.firebase.database.DatabaseReference
-import com.google.firebase.database.FirebaseDatabase
+import com.google.firebase.database.*
 import curso.carlos.indrive.helpers.CacheManager
+import curso.carlos.indrive.model.Driver
+import curso.carlos.indrive.model.MyRoute
 import curso.carlos.indrive.services.DirectionsService
 import curso.carlos.indrive.services.dto.Direction
 import retrofit2.Call
@@ -170,7 +171,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
     private fun connectPolyline(polylines: List<LatLng>) {
         val polylineOptions = PolylineOptions().addAll(polylines).clickable(true)
         googleMap.addPolyline(polylineOptions)
-        Toast.makeText(applicationContext,"Failed Load Direction",Toast.LENGTH_LONG).show()
+        listenMyService(auth.currentUser!!.uid)
     }
 
     /**
@@ -217,10 +218,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
 
     private fun paintRoute(route: MapRoute) {
 
-        val cache = CacheManager(this)
-        val polylineCached = cache.getValue(POLYLINE_CACHE_KEY)
-        if(!polylineCached.isEmpty()) {
-            connectPolyline(decodePoly(polylineCached))
+        if (paintPolylineFromCache()) {
             return
         }
 
@@ -235,7 +233,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
             override fun onResponse(call: Call<Direction>, response: Response<Direction>) {
                 if(response.code() == 200){
                     val polylineDecoded = decodePoly(response.body()!!.routes[0].polyline.points)
-                    cache.setValue(POLYLINE_CACHE_KEY, response.body()!!.routes[0].polyline.points)
+                    savePolylineInCache(response.body()!!.routes[0].polyline.points)
 
                     connectPolyline(polylineDecoded)
                 }
@@ -245,6 +243,76 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
                 Toast.makeText(applicationContext,"Failed Load Direction",Toast.LENGTH_LONG).show()
             }
         })
+    }
+
+    private fun listenMyService(userId: String) {
+        database.child("addresess").child("address_$userId").addValueEventListener(object: ValueEventListener {
+
+            override fun onDataChange(snapshot: DataSnapshot) {
+                val myRoute = snapshot.getValue(MyRoute::class.java)
+
+                if(myRoute!!.status) {
+
+                    database.child("drivers").child("driver_${myRoute.drivername}").addValueEventListener(object: ValueEventListener {
+                        override fun onCancelled(p0: DatabaseError) {}
+
+                        override fun onDataChange(dsnapshot: DataSnapshot) {
+                            val driverAssigned =  dsnapshot.getValue(Driver::class.java)
+
+                            if (driverAssigned != null) {
+                                paintIcon(driverAssigned!!.name, driverAssigned.origin_lat.toDouble(), driverAssigned.origin_long.toDouble())
+                            }
+                        }
+
+                    })
+                } else {
+                    clearIcon()
+                }
+            }
+
+            override fun onCancelled(p0: DatabaseError) {}
+        })
+    }
+
+    private fun paintIcon(driver: String, lat: Double, lon: Double) {
+        clearIcon()
+        paintPolylineFromCache()
+
+        val markerOptions = MarkerOptions()
+            .position(LatLng(lat, lon))
+            .title(driver)
+            .icon(bitmapDescriptorFromVector(this, R.drawable.drive_indicator))
+
+        googleMap.addMarker(markerOptions)
+    }
+
+    private fun paintPolylineFromCache(): Boolean {
+        val cache = CacheManager(this)
+        val polylineCached = cache.getValue(POLYLINE_CACHE_KEY)
+        if(!polylineCached.isEmpty()) {
+            connectPolyline(decodePoly(polylineCached))
+            return true
+        }
+
+        return false
+    }
+
+    private fun savePolylineInCache(polyline: String) {
+        val cache = CacheManager(this)
+        cache.setValue(POLYLINE_CACHE_KEY, polyline)
+    }
+
+    private fun bitmapDescriptorFromVector(context: Context, vectorResId: Int): BitmapDescriptor {
+        val vectorDrawable = ContextCompat.getDrawable(context, vectorResId)
+        vectorDrawable!!.setBounds(0, 0, 100, 100)
+        val bitmap = Bitmap.createBitmap(vectorDrawable.intrinsicWidth, vectorDrawable.intrinsicHeight, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        vectorDrawable.draw(canvas)
+        return BitmapDescriptorFactory.fromBitmap(bitmap)
+    }
+
+    private fun clearIcon() {
+        googleMap.clear()
     }
 
     // Menu configuration
@@ -342,5 +410,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
             service_mount = mount
         }
     }
+
+
 
 }
