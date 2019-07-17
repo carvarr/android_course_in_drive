@@ -3,19 +3,19 @@ package curso.carlos.indrive
 import android.annotation.SuppressLint
 import android.app.Dialog
 import android.content.Context
-import android.content.DialogInterface
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.support.v7.app.AppCompatActivity
 import android.os.Bundle
-import android.widget.Button
 import android.widget.Toast
 import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.support.v4.app.ActivityCompat
+import android.support.v4.app.NotificationCompat
+import android.support.v4.app.NotificationManagerCompat
 import android.support.v4.content.ContextCompat
 import android.support.v7.app.AlertDialog
 import android.view.Menu
@@ -35,16 +35,20 @@ import com.google.android.libraries.places.widget.AutocompleteSupportFragment
 import com.google.android.libraries.places.widget.listener.PlaceSelectionListener
 import com.google.firebase.database.*
 import curso.carlos.indrive.helpers.CacheManager
+import curso.carlos.indrive.helpers.DistanceManager
 import curso.carlos.indrive.model.Driver
 import curso.carlos.indrive.model.MyRoute
 import curso.carlos.indrive.services.DirectionsService
+import curso.carlos.indrive.services.WeatherService
 import curso.carlos.indrive.services.dto.Direction
+import io.reactivex.disposables.Disposable
+import io.reactivex.subjects.BehaviorSubject
+import kotlinx.android.synthetic.main.activity_main.*
 import retrofit2.Call
 import retrofit2.Callback
 import retrofit2.Response
 import retrofit2.Retrofit
 import retrofit2.converter.gson.GsonConverterFactory
-
 
 class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionListener {
     private lateinit var auth: FirebaseAuth
@@ -52,6 +56,12 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
     private lateinit var locationListener: InDriveLocationListener
     private lateinit var googleMap: GoogleMap
     private lateinit var database: DatabaseReference
+    private val wheaterService = WeatherService()
+
+    private lateinit var getWeatherMetrics: Disposable
+    private lateinit var getLocationOnMapReady: Disposable
+    private lateinit var getLocationOnSaveRoute: Disposable
+    private lateinit var getLocationOnDriverRoutePainted: Disposable
 
     private val REQUEST_ACCESS_PERMISSION = 1
     private val GOOGLE_BASE_URL = "https://maps.googleapis.com/"
@@ -71,12 +81,6 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
 
         getUserLocation()
 
-        val logoutBtn = findViewById<Button>(R.id.logoutBtn)
-        logoutBtn.setOnClickListener {
-            val intent = Intent(applicationContext, LoginActivity::class.java)
-            startActivity(intent)
-        }
-
         // Initialize Places.
         Places.initialize(applicationContext, "AIzaSyAF7ycjJe_F8sfUiDZVd_8tpMp2C72Mvrs")
 
@@ -87,13 +91,29 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         mapFragment!!.getMapAsync(this)
 
         // Initialize the AutocompleteSupportFragment.
-        val autocompleteFragment = supportFragmentManager.findFragmentById(R.id.autocomplete_fragment) as AutocompleteSupportFragment?
-        autocompleteFragment!!.setPlaceFields(arrayListOf(Place.Field.ID, Place.Field.NAME, Place.Field.LAT_LNG))
+        val autocompleteFragment =
+            supportFragmentManager.findFragmentById(R.id.autocomplete_fragment) as AutocompleteSupportFragment?
+        autocompleteFragment!!.setPlaceFields(
+            arrayListOf(
+                Place.Field.ID,
+                Place.Field.NAME,
+                Place.Field.LAT_LNG
+            )
+        )
         autocompleteFragment.setOnPlaceSelectedListener(this)
 
+        getTemperatureOnLocation()
     }
 
-   private fun getUserLocation() {
+    override fun onDestroy() {
+        super.onDestroy()
+        getWeatherMetrics.dispose()
+        getLocationOnMapReady.dispose()
+        getLocationOnSaveRoute.dispose()
+        getLocationOnDriverRoutePainted.dispose()
+    }
+
+    private fun getUserLocation() {
         if (ContextCompat.checkSelfPermission(
                 this,
                 android.Manifest.permission.ACCESS_FINE_LOCATION
@@ -114,14 +134,19 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
     @SuppressLint("MissingPermission")
     fun requestUserLocation() {
         locationListener = InDriveLocationListener()
-        locationManager.requestLocationUpdates(LocationManager.GPS_PROVIDER, 0, 0.1f, locationListener)
+        locationManager.requestLocationUpdates(
+            LocationManager.GPS_PROVIDER,
+            0,
+            0.1f,
+            locationListener
+        )
     }
 
     private fun reloadMapPosition(latitude: Double?, longitude: Double?) {
         val lat: Double = latitude ?: 0.0
         val lon: Double = longitude ?: 0.0
 
-        val pos = LatLng(lat,lon)
+        val pos = LatLng(lat, lon)
         this.googleMap.addMarker(MarkerOptions().position(pos).title("My position"))
         this.googleMap.moveCamera(CameraUpdateFactory.newLatLng(pos))
         this.googleMap.setMinZoomPreference(5f)
@@ -160,8 +185,10 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
             val dlng = if (result and 1 != 0) (result shr 1).inv() else result shr 1
             lng += dlng
 
-            val p = LatLng(lat.toDouble() / 1E5,
-                lng.toDouble() / 1E5)
+            val p = LatLng(
+                lat.toDouble() / 1E5,
+                lng.toDouble() / 1E5
+            )
             poly.add(p)
         }
 
@@ -189,15 +216,15 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         val mountText = viewInflated.findViewById<EditText>(R.id.mount)
 
         dialogBuilder.setView(viewInflated)
-            .setPositiveButton(R.string.save, DialogInterface.OnClickListener { dialog, which ->
-                if(mountText.text.trim().isNotEmpty()) {
+            .setPositiveButton(R.string.save) { dialog, _ ->
+                if (mountText.text.trim().isNotEmpty()) {
                     saveRoute(place, mountText.text.toString().toInt())
                     dialog.dismiss()
                 }
-            })
-            .setNegativeButton(R.string.cancel, DialogInterface.OnClickListener { dialog, which ->
+            }
+            .setNegativeButton(R.string.cancel) { dialog, _ ->
                 dialog.cancel()
-            })
+            }
 
         return dialogBuilder.create()
     }
@@ -205,15 +232,18 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
 
     private fun saveRoute(place: Place, serviceMount: Int) {
         val route = MapRoute()
-        route.origin_lat = locationListener.mylocation?.latitude.toString()
-        route.origin_long = locationListener.mylocation?.longitude.toString()
-        route.destination_lat = place.latLng!!.latitude.toString()
-        route.destination_long = place.latLng!!.longitude.toString()
-        route.username = auth.currentUser!!.email!!
-        route.service_demand = MountDemand(serviceMount)
 
-        saveUserRoute(auth.currentUser!!.uid, route)
-        paintRoute(route)
+        getLocationOnSaveRoute = locationListener.locationUpdates.subscribe { location ->
+            route.origin_lat = location.latitude.toString()
+            route.origin_long = location.longitude.toString()
+            route.destination_lat = place.latLng!!.latitude.toString()
+            route.destination_long = place.latLng!!.longitude.toString()
+            route.username = auth.currentUser!!.email!!
+            route.service_demand = MountDemand(serviceMount)
+
+            saveUserRoute(auth.currentUser!!.uid, route)
+            paintRoute(route)
+        }
     }
 
     private fun paintRoute(route: MapRoute) {
@@ -228,10 +258,13 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
             .build()
 
         val service = retrofit.create(DirectionsService::class.java)
-        val call = service.getDirection("${route.origin_lat},${route.origin_long}", "${route.destination_lat}, ${route.destination_long}")
-        call.enqueue(object: Callback<Direction> {
+        val call = service.getDirection(
+            "${route.origin_lat},${route.origin_long}",
+            "${route.destination_lat}, ${route.destination_long}"
+        )
+        call.enqueue(object : Callback<Direction> {
             override fun onResponse(call: Call<Direction>, response: Response<Direction>) {
-                if(response.code() == 200){
+                if (response.code() == 200) {
                     val polylineDecoded = decodePoly(response.body()!!.routes[0].polyline.points)
                     savePolylineInCache(response.body()!!.routes[0].polyline.points)
 
@@ -240,38 +273,55 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
             }
 
             override fun onFailure(call: Call<Direction>, t: Throwable) {
-                Toast.makeText(applicationContext,"Failed Load Direction",Toast.LENGTH_LONG).show()
+                Toast.makeText(applicationContext, "Failed Load Direction", Toast.LENGTH_LONG)
+                    .show()
             }
         })
     }
 
     private fun listenMyService(userId: String) {
-        database.child("addresess").child("address_$userId").addValueEventListener(object: ValueEventListener {
+        database.child("addresess").child("address_$userId")
+            .addValueEventListener(object : ValueEventListener {
 
-            override fun onDataChange(snapshot: DataSnapshot) {
-                val myRoute = snapshot.getValue(MyRoute::class.java)
+                override fun onDataChange(snapshot: DataSnapshot) {
+                    val myRoute = snapshot.getValue(MyRoute::class.java)
 
-                if(myRoute!!.status) {
+                    if (myRoute!!.status) {
 
-                    database.child("drivers").child("driver_${myRoute.drivername}").addValueEventListener(object: ValueEventListener {
-                        override fun onCancelled(p0: DatabaseError) {}
+                        database.child("drivers").child("driver_${myRoute.drivername}")
+                            .addValueEventListener(object : ValueEventListener {
+                                override fun onCancelled(p0: DatabaseError) {}
 
-                        override fun onDataChange(dsnapshot: DataSnapshot) {
-                            val driverAssigned =  dsnapshot.getValue(Driver::class.java)
+                                override fun onDataChange(dsnapshot: DataSnapshot) {
+                                    val driverAssigned = dsnapshot.getValue(Driver::class.java)
 
-                            if (driverAssigned != null) {
-                                paintIcon(driverAssigned!!.name, driverAssigned.origin_lat.toDouble(), driverAssigned.origin_long.toDouble())
-                            }
-                        }
+                                    if (driverAssigned != null) {
+                                        paintIcon(
+                                            driverAssigned!!.name,
+                                            driverAssigned.origin_lat.toDouble(),
+                                            driverAssigned.origin_long.toDouble()
+                                        )
 
-                    })
-                } else {
-                    clearIcon()
+                                        getLocationOnDriverRoutePainted =
+                                            locationListener.locationUpdates.subscribe { userLocation ->
+                                                notifyWhenDriverIsArriving(
+                                                    driverAssigned.origin_lat.toDouble(),
+                                                    driverAssigned.origin_long.toDouble(),
+                                                    userLocation.latitude,
+                                                    userLocation.longitude
+                                                )
+                                            }
+                                    }
+                                }
+
+                            })
+                    } else {
+                        clearIcon()
+                    }
                 }
-            }
 
-            override fun onCancelled(p0: DatabaseError) {}
-        })
+                override fun onCancelled(p0: DatabaseError) {}
+            })
     }
 
     private fun paintIcon(driver: String, lat: Double, lon: Double) {
@@ -289,7 +339,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
     private fun paintPolylineFromCache(): Boolean {
         val cache = CacheManager(this)
         val polylineCached = cache.getValue(POLYLINE_CACHE_KEY)
-        if(!polylineCached.isEmpty()) {
+        if (!polylineCached.isEmpty()) {
             connectPolyline(decodePoly(polylineCached))
             return true
         }
@@ -305,7 +355,11 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
     private fun bitmapDescriptorFromVector(context: Context, vectorResId: Int): BitmapDescriptor {
         val vectorDrawable = ContextCompat.getDrawable(context, vectorResId)
         vectorDrawable!!.setBounds(0, 0, 100, 100)
-        val bitmap = Bitmap.createBitmap(vectorDrawable.intrinsicWidth, vectorDrawable.intrinsicHeight, Bitmap.Config.ARGB_8888)
+        val bitmap = Bitmap.createBitmap(
+            vectorDrawable.intrinsicWidth,
+            vectorDrawable.intrinsicHeight,
+            Bitmap.Config.ARGB_8888
+        )
         val canvas = Canvas(bitmap)
         vectorDrawable.draw(canvas)
         return BitmapDescriptorFactory.fromBitmap(bitmap)
@@ -313,6 +367,39 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
 
     private fun clearIcon() {
         googleMap.clear()
+    }
+
+    private fun getTemperatureOnLocation() {
+        getWeatherMetrics = locationListener.locationUpdates.subscribe { location ->
+            wheaterService.getWeatherMetricsInLocation(
+                location.latitude.toString(),
+                location.longitude.toString()
+            ).subscribe { weather ->
+                tv_temperature.text = "Temperature is: ${weather.metrics.temp}"
+            }
+        }
+    }
+
+
+    fun notifyWhenDriverIsArriving(
+        driverLat: Double,
+        driverLon: Double,
+        userLat: Double,
+        userLong: Double
+    ) {
+        val distance = DistanceManager.calculateDistance(driverLat, driverLon, userLat, userLong)
+        if (distance <= DistanceManager.UPPER_LIMIT_DISTANCE_METERS) {
+            var builder = NotificationCompat.Builder(this, "")
+                .setSmallIcon(R.drawable.ic_launcher_background)
+                .setContentTitle("Your driver is near")
+                .setContentText("hey your driver is $distance meters from your location")
+                .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+
+            with(NotificationManagerCompat.from(this)) {
+                notify(0, builder.build())
+            }
+
+        }
     }
 
     // Menu configuration
@@ -343,12 +430,16 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
     }
 
 
-    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<String>, grantResults: IntArray) {
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<String>,
+        grantResults: IntArray
+    ) {
         when (requestCode) {
             REQUEST_ACCESS_PERMISSION -> {
                 // If request is cancelled, the result arrays are empty.
                 if ((grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
-                   //requestUserLocation()
+                    //requestUserLocation()
                 }
 
                 return
@@ -358,30 +449,28 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
 
     override fun onMapReady(googleMap: GoogleMap) {
         this.googleMap = googleMap
-        reloadMapPosition(locationListener.mylocation?.latitude, locationListener.mylocation?.longitude)
+        getLocationOnMapReady = locationListener.locationUpdates.subscribe { location ->
+            reloadMapPosition(location.latitude, location.longitude)
+        }
     }
 
     override fun onPlaceSelected(p0: Place) {
-        Toast.makeText(applicationContext,""+p0!!.name+p0!!.latLng,Toast.LENGTH_LONG).show()
+        Toast.makeText(applicationContext, "" + p0!!.name + p0!!.latLng, Toast.LENGTH_LONG).show()
 
         createMountDialog(p0).show()
     }
 
     override fun onError(status: Status) {
-        Toast.makeText(applicationContext,""+status.toString(),Toast.LENGTH_LONG).show()
+        Toast.makeText(applicationContext, "" + status.toString(), Toast.LENGTH_LONG).show()
     }
 
     inner class InDriveLocationListener : LocationListener {
-        var mylocation: Location?
+        var locationUpdates = BehaviorSubject.create<Location>()
 
-        constructor() : super() {
-            mylocation = Location("me")
-            mylocation!!.longitude
-            mylocation!!.latitude
-        }
+        constructor() : super() {}
 
         override fun onLocationChanged(location: Location?) {
-            mylocation = location
+            locationUpdates.onNext(location!!)
         }
 
         override fun onStatusChanged(p0: String?, p1: Int, p2: Bundle?) {}
@@ -389,6 +478,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         override fun onProviderEnabled(p0: String?) {}
 
         override fun onProviderDisabled(p0: String?) {}
+
     }
 
     inner class MapRoute {
@@ -410,7 +500,6 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
             service_mount = mount
         }
     }
-
 
 
 }
