@@ -5,8 +5,10 @@ import android.app.Dialog
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Bitmap
-import android.graphics.Canvas
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.support.v7.app.AppCompatActivity
 import android.os.Bundle
 import android.widget.Toast
@@ -21,51 +23,42 @@ import android.support.v7.app.AlertDialog
 import android.view.Menu
 import android.view.MenuItem
 import android.widget.EditText
-import com.google.android.gms.maps.GoogleMap
 import com.google.android.gms.maps.SupportMapFragment
-import com.google.android.gms.maps.OnMapReadyCallback
 import com.google.firebase.auth.FirebaseAuth
 import curso.carlos.indrive.gateway.LoginActivity
 import com.google.android.gms.common.api.Status
-import com.google.android.gms.maps.CameraUpdateFactory
 import com.google.android.gms.maps.model.*
 import com.google.android.libraries.places.api.Places
 import com.google.android.libraries.places.api.model.Place
 import com.google.android.libraries.places.widget.AutocompleteSupportFragment
 import com.google.android.libraries.places.widget.listener.PlaceSelectionListener
 import com.google.firebase.database.*
-import curso.carlos.indrive.helpers.CacheManager
 import curso.carlos.indrive.helpers.DistanceManager
-import curso.carlos.indrive.model.Driver
-import curso.carlos.indrive.model.MyRoute
-import curso.carlos.indrive.services.DirectionsService
+import curso.carlos.indrive.repositories.RoutesRepository
+import curso.carlos.indrive.services.MapService
+import curso.carlos.indrive.services.RouteService
 import curso.carlos.indrive.services.WeatherService
-import curso.carlos.indrive.services.dto.Direction
 import io.reactivex.disposables.Disposable
 import io.reactivex.subjects.BehaviorSubject
 import kotlinx.android.synthetic.main.activity_main.*
-import retrofit2.Call
-import retrofit2.Callback
-import retrofit2.Response
-import retrofit2.Retrofit
-import retrofit2.converter.gson.GsonConverterFactory
+import java.util.*
 
-class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionListener {
+class MainActivity : AppCompatActivity(), PlaceSelectionListener {
     private lateinit var auth: FirebaseAuth
     private lateinit var locationManager: LocationManager
     private lateinit var locationListener: InDriveLocationListener
-    private lateinit var googleMap: GoogleMap
     private lateinit var database: DatabaseReference
     private val wheaterService = WeatherService()
+    private lateinit var mapService: MapService
+    private lateinit var originLocation: Location
+    private lateinit var destLocation: Place
 
     private lateinit var getWeatherMetrics: Disposable
     private lateinit var getLocationOnMapReady: Disposable
-    private lateinit var getLocationOnSaveRoute: Disposable
     private lateinit var getLocationOnDriverRoutePainted: Disposable
+    private lateinit var getDriverLocationUpdates: Disposable
 
     private val REQUEST_ACCESS_PERMISSION = 1
-    private val GOOGLE_BASE_URL = "https://maps.googleapis.com/"
-    private val POLYLINE_CACHE_KEY = "polyline"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,11 +77,15 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         // Initialize Places.
         Places.initialize(applicationContext, "AIzaSyAF7ycjJe_F8sfUiDZVd_8tpMp2C72Mvrs")
 
+        mapService = MapService(this)
+        initMap()
+
+
         // Firebase reference
         database = FirebaseDatabase.getInstance().reference
 
         val mapFragment = supportFragmentManager.findFragmentById(R.id.map) as SupportMapFragment?
-        mapFragment!!.getMapAsync(this)
+        mapFragment!!.getMapAsync(mapService.onReadyMapCallback())
 
         // Initialize the AutocompleteSupportFragment.
         val autocompleteFragment =
@@ -107,10 +104,14 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
 
     override fun onDestroy() {
         super.onDestroy()
-        getWeatherMetrics.dispose()
-        getLocationOnMapReady.dispose()
-        getLocationOnSaveRoute.dispose()
-        getLocationOnDriverRoutePainted.dispose()
+        if (!getWeatherMetrics.isDisposed)
+            getWeatherMetrics.dispose()
+        if (!getLocationOnMapReady.isDisposed)
+            getLocationOnMapReady.dispose()
+        if (!getLocationOnDriverRoutePainted.isDisposed)
+            getLocationOnDriverRoutePainted.dispose()
+        if (!getDriverLocationUpdates.isDisposed)
+            getDriverLocationUpdates.dispose()
     }
 
     private fun getUserLocation() {
@@ -142,62 +143,8 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         )
     }
 
-    private fun reloadMapPosition(latitude: Double?, longitude: Double?) {
-        val lat: Double = latitude ?: 0.0
-        val lon: Double = longitude ?: 0.0
-
-        val pos = LatLng(lat, lon)
-        this.googleMap.addMarker(MarkerOptions().position(pos).title("My position"))
-        this.googleMap.moveCamera(CameraUpdateFactory.newLatLng(pos))
-        this.googleMap.setMinZoomPreference(5f)
-    }
-
-    private fun saveUserRoute(userId: String, route: MapRoute) {
-        database.child("addresess").child("address_$userId").setValue(route)
-    }
-
-    private fun decodePoly(encoded: String): List<LatLng> {
-        val poly = ArrayList<LatLng>()
-        var index = 0
-        val len = encoded.length
-        var lat = 0
-        var lng = 0
-
-        while (index < len) {
-            var b: Int
-            var shift = 0
-            var result = 0
-            do {
-                b = encoded[index++].toInt() - 63
-                result = result or (b and 0x1f shl shift)
-                shift += 5
-            } while (b >= 0x20)
-            val dlat = if (result and 1 != 0) (result shr 1).inv() else result shr 1
-            lat += dlat
-
-            shift = 0
-            result = 0
-            do {
-                b = encoded[index++].toInt() - 63
-                result = result or (b and 0x1f shl shift)
-                shift += 5
-            } while (b >= 0x20)
-            val dlng = if (result and 1 != 0) (result shr 1).inv() else result shr 1
-            lng += dlng
-
-            val p = LatLng(
-                lat.toDouble() / 1E5,
-                lng.toDouble() / 1E5
-            )
-            poly.add(p)
-        }
-
-        return poly
-    }
-
     private fun connectPolyline(polylines: List<LatLng>) {
-        val polylineOptions = PolylineOptions().addAll(polylines).clickable(true)
-        googleMap.addPolyline(polylineOptions)
+        mapService.paintPolyline(polylines)
         listenMyService(auth.currentUser!!.uid)
     }
 
@@ -209,10 +156,11 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         startActivity(intent)
     }
 
+    @SuppressLint("InflateParams")
     private fun createMountDialog(place: Place): Dialog {
         val dialogBuilder = AlertDialog.Builder(this)
         val inflater = this.layoutInflater
-        val viewInflated = inflater.inflate(R.layout.dialog_service_mount, null)
+        val viewInflated = inflater.inflate(R.layout.dialog_service_mount,null)
         val mountText = viewInflated.findViewById<EditText>(R.id.mount)
 
         dialogBuilder.setView(viewInflated)
@@ -231,146 +179,104 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
 
 
     private fun saveRoute(place: Place, serviceMount: Int) {
-        val route = MapRoute()
-
-        getLocationOnSaveRoute = locationListener.locationUpdates.subscribe { location ->
-            route.origin_lat = location.latitude.toString()
-            route.origin_long = location.longitude.toString()
-            route.destination_lat = place.latLng!!.latitude.toString()
-            route.destination_long = place.latLng!!.longitude.toString()
-            route.username = auth.currentUser!!.email!!
-            route.service_demand = MountDemand(serviceMount)
-
-            saveUserRoute(auth.currentUser!!.uid, route)
-            paintRoute(route)
-        }
+        getLocationOnDriverRoutePainted =
+            locationListener.locationUpdates.take(1).subscribe { location ->
+                val routeService = RouteService()
+                originLocation = location
+                destLocation = place
+                routeService.saveRoute(
+                    auth.currentUser!!.uid,
+                    auth.currentUser!!.email!!,
+                    serviceMount,
+                    location,
+                    place
+                )
+                paintRoute(
+                    location.latitude.toString(),
+                    location.longitude.toString(),
+                    place.latLng?.latitude.toString(),
+                    place.latLng?.longitude.toString()
+                )
+            }
     }
 
-    private fun paintRoute(route: MapRoute) {
-
-        if (paintPolylineFromCache()) {
-            return
-        }
-
-        val retrofit = Retrofit.Builder()
-            .baseUrl(GOOGLE_BASE_URL)
-            .addConverterFactory(GsonConverterFactory.create())
-            .build()
-
-        val service = retrofit.create(DirectionsService::class.java)
-        val call = service.getDirection(
-            "${route.origin_lat},${route.origin_long}",
-            "${route.destination_lat}, ${route.destination_long}"
-        )
-        call.enqueue(object : Callback<Direction> {
-            override fun onResponse(call: Call<Direction>, response: Response<Direction>) {
-                if (response.code() == 200) {
-                    val polylineDecoded = decodePoly(response.body()!!.routes[0].polyline.points)
-                    savePolylineInCache(response.body()!!.routes[0].polyline.points)
-
-                    connectPolyline(polylineDecoded)
+    private fun paintRoute(originLat: String, originLon: String, destLat: String, destLon: String) {
+        val subs =
+            mapService.getDirection(
+                originLat,
+                originLon,
+                destLat,
+                destLon
+            )
+                .doOnError {
+                    Toast.makeText(
+                        applicationContext,
+                        "Failed Load Direction",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
-            }
-
-            override fun onFailure(call: Call<Direction>, t: Throwable) {
-                Toast.makeText(applicationContext, "Failed Load Direction", Toast.LENGTH_LONG)
-                    .show()
-            }
-        })
+                .subscribe { polyline ->
+                    connectPolyline(polyline)
+                }
     }
 
     private fun listenMyService(userId: String) {
-        database.child("addresess").child("address_$userId")
-            .addValueEventListener(object : ValueEventListener {
 
-                override fun onDataChange(snapshot: DataSnapshot) {
-                    val myRoute = snapshot.getValue(MyRoute::class.java)
+        val routesRepository = RoutesRepository()
+        getDriverLocationUpdates = routesRepository.get(userId).subscribe { myRoute ->
+            if (myRoute.status) {
+                routesRepository.getDriver(myRoute.drivername).subscribe { driverAssigned ->
+                    if (driverAssigned != null) {
+                        paintIcon(
+                            driverAssigned.name,
+                            driverAssigned.origin_lat.toDouble(),
+                            driverAssigned.origin_long.toDouble()
+                        )
 
-                    if (myRoute!!.status) {
-
-                        database.child("drivers").child("driver_${myRoute.drivername}")
-                            .addValueEventListener(object : ValueEventListener {
-                                override fun onCancelled(p0: DatabaseError) {}
-
-                                override fun onDataChange(dsnapshot: DataSnapshot) {
-                                    val driverAssigned = dsnapshot.getValue(Driver::class.java)
-
-                                    if (driverAssigned != null) {
-                                        paintIcon(
-                                            driverAssigned!!.name,
-                                            driverAssigned.origin_lat.toDouble(),
-                                            driverAssigned.origin_long.toDouble()
-                                        )
-
-                                        getLocationOnDriverRoutePainted =
-                                            locationListener.locationUpdates.subscribe { userLocation ->
-                                                notifyWhenDriverIsArriving(
-                                                    driverAssigned.origin_lat.toDouble(),
-                                                    driverAssigned.origin_long.toDouble(),
-                                                    userLocation.latitude,
-                                                    userLocation.longitude
-                                                )
-                                            }
-                                    }
-                                }
-
-                            })
-                    } else {
-                        clearIcon()
+                        val getLocationOnDriverRoutePainted =
+                            locationListener.locationUpdates.take(1).subscribe { userLocation ->
+                                notifyWhenDriverIsArriving(
+                                    driverAssigned.origin_lat.toDouble(),
+                                    driverAssigned.origin_long.toDouble(),
+                                    userLocation.latitude,
+                                    userLocation.longitude
+                                )
+                            }
                     }
                 }
+            } else {
+                mapService.clearMap()
 
-                override fun onCancelled(p0: DatabaseError) {}
-            })
+                val sub = mapService.getDirection(
+                    originLocation.latitude.toString(),
+                    originLocation.longitude.toString(),
+                    destLocation.latLng?.latitude.toString(),
+                    destLocation.latLng?.longitude.toString()
+                ).subscribe { polyline ->
+                    connectPolyline(polyline)
+                }
+            }
+        }
     }
 
     private fun paintIcon(driver: String, lat: Double, lon: Double) {
-        clearIcon()
-        paintPolylineFromCache()
+        mapService.clearMap()
 
-        val markerOptions = MarkerOptions()
-            .position(LatLng(lat, lon))
-            .title(driver)
-            .icon(bitmapDescriptorFromVector(this, R.drawable.drive_indicator))
-
-        googleMap.addMarker(markerOptions)
-    }
-
-    private fun paintPolylineFromCache(): Boolean {
-        val cache = CacheManager(this)
-        val polylineCached = cache.getValue(POLYLINE_CACHE_KEY)
-        if (!polylineCached.isEmpty()) {
-            connectPolyline(decodePoly(polylineCached))
-            return true
+        val sub = mapService.getDirection(
+            originLocation.latitude.toString(),
+            originLocation.longitude.toString(),
+            destLocation.latLng?.latitude.toString(),
+            destLocation.latLng?.longitude.toString()
+        ).subscribe { polyline ->
+            mapService.paintPolyline(polyline)
         }
 
-        return false
+        mapService.paintDriverIcon(driver, lat, lon)
     }
 
-    private fun savePolylineInCache(polyline: String) {
-        val cache = CacheManager(this)
-        cache.setValue(POLYLINE_CACHE_KEY, polyline)
-    }
-
-    private fun bitmapDescriptorFromVector(context: Context, vectorResId: Int): BitmapDescriptor {
-        val vectorDrawable = ContextCompat.getDrawable(context, vectorResId)
-        vectorDrawable!!.setBounds(0, 0, 100, 100)
-        val bitmap = Bitmap.createBitmap(
-            vectorDrawable.intrinsicWidth,
-            vectorDrawable.intrinsicHeight,
-            Bitmap.Config.ARGB_8888
-        )
-        val canvas = Canvas(bitmap)
-        vectorDrawable.draw(canvas)
-        return BitmapDescriptorFactory.fromBitmap(bitmap)
-    }
-
-    private fun clearIcon() {
-        googleMap.clear()
-    }
 
     private fun getTemperatureOnLocation() {
-        getWeatherMetrics = locationListener.locationUpdates.subscribe { location ->
+        getWeatherMetrics = locationListener.locationUpdates.take(1).subscribe { location ->
             wheaterService.getWeatherMetricsInLocation(
                 location.latitude.toString(),
                 location.longitude.toString()
@@ -381,7 +287,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
     }
 
 
-    fun notifyWhenDriverIsArriving(
+    private fun notifyWhenDriverIsArriving(
         driverLat: Double,
         driverLon: Double,
         userLat: Double,
@@ -399,6 +305,50 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
                 notify(0, builder.build())
             }
 
+        }
+    }
+
+    private fun listenLightSensor() {
+        val sensorManager = getSystemService(Context.SENSOR_SERVICE) as SensorManager
+        val lightSensor = sensorManager.getDefaultSensor(Sensor.TYPE_LIGHT)
+        if (lightSensor != null) {
+            sensorManager.registerListener(object : SensorEventListener {
+                override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) {}
+
+                override fun onSensorChanged(event: SensorEvent?) {
+                    if (event?.sensor?.type == Sensor.TYPE_LIGHT) {
+
+                        if (event.values[0] > 10000)
+                            mapService.changeMapStyle(MapService.MAP_STYLE_TYPE.NIGHT_MODE)
+                        else
+                            mapService.changeMapStyle(MapService.MAP_STYLE_TYPE.DAY_MODE)
+                    }
+                }
+
+            }, lightSensor, SensorManager.SENSOR_DELAY_NORMAL)
+        }
+
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun initMap() {
+        val mapSubs = mapService.mapListener.subscribe { googleMap ->
+
+            getLocationOnMapReady = locationListener.locationUpdates.take(1).subscribe { location ->
+                mapService.reloadMapPosition(location.latitude, location.longitude)
+            }
+
+            val lastLocation = locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+            if (lastLocation != null) {
+                mapService.reloadMapPosition(lastLocation.latitude, lastLocation.longitude)
+            }
+
+            val currentTime = Calendar.getInstance()
+            val currentHour = currentTime.get(Calendar.HOUR_OF_DAY)
+            if (currentHour > 18 || (currentHour > 0 && currentHour <= 6))
+                googleMap.setMapStyle(MapStyleOptions.loadRawResourceStyle(this, R.raw.map))
+
+            listenLightSensor()
         }
     }
 
@@ -439,7 +389,7 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
             REQUEST_ACCESS_PERMISSION -> {
                 // If request is cancelled, the result arrays are empty.
                 if ((grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED)) {
-                    //requestUserLocation()
+                    requestUserLocation()
                 }
 
                 return
@@ -447,15 +397,8 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         }
     }
 
-    override fun onMapReady(googleMap: GoogleMap) {
-        this.googleMap = googleMap
-        getLocationOnMapReady = locationListener.locationUpdates.subscribe { location ->
-            reloadMapPosition(location.latitude, location.longitude)
-        }
-    }
-
     override fun onPlaceSelected(p0: Place) {
-        Toast.makeText(applicationContext, "" + p0!!.name + p0!!.latLng, Toast.LENGTH_LONG).show()
+        Toast.makeText(applicationContext, "" + p0.name + p0.latLng, Toast.LENGTH_LONG).show()
 
         createMountDialog(p0).show()
     }
@@ -464,10 +407,8 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
         Toast.makeText(applicationContext, "" + status.toString(), Toast.LENGTH_LONG).show()
     }
 
-    inner class InDriveLocationListener : LocationListener {
-        var locationUpdates = BehaviorSubject.create<Location>()
-
-        constructor() : super() {}
+    inner class InDriveLocationListener() : LocationListener {
+        var locationUpdates: BehaviorSubject<Location> = BehaviorSubject.create()
 
         override fun onLocationChanged(location: Location?) {
             locationUpdates.onNext(location!!)
@@ -479,26 +420,6 @@ class MainActivity : AppCompatActivity(), OnMapReadyCallback, PlaceSelectionList
 
         override fun onProviderDisabled(p0: String?) {}
 
-    }
-
-    inner class MapRoute {
-        var drivername: String = "nil"
-        var destination_lat: String = ""
-        var destination_long: String = ""
-        var origin_lat: String = ""
-        var origin_long: String = ""
-        var status: Boolean = false
-        var username: String = ""
-        lateinit var service_demand: MountDemand
-    }
-
-    inner class MountDemand {
-        var drivername = "nil"
-        var service_mount = 0
-
-        constructor(mount: Int) {
-            service_mount = mount
-        }
     }
 
 
