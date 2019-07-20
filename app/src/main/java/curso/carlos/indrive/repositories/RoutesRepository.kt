@@ -2,6 +2,7 @@ package curso.carlos.indrive.repositories
 
 import com.google.firebase.database.*
 import curso.carlos.indrive.model.Driver
+import curso.carlos.indrive.model.History
 import curso.carlos.indrive.model.MapRoute
 import curso.carlos.indrive.model.MyRoute
 import io.reactivex.Observable
@@ -56,6 +57,21 @@ class RoutesRepository {
                         emitter.onError(p0.toException())
                     }
                 })
+        }
+    }
+
+    fun getHistory(userId: String): Observable<History> {
+        return Observable.create { emitter ->
+            db.child("service_history").child(userId).addValueEventListener(object: ValueEventListener {
+                override fun onDataChange(dsnapshot: DataSnapshot) {
+                    val history = dsnapshot.getValue(History::class.java)
+                    emitter.onNext(history!!)
+                }
+
+                override fun onCancelled(p0: DatabaseError) {
+                    emitter.onError(p0.toException())
+                }
+            })
         }
     }
 

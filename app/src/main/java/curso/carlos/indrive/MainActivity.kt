@@ -57,6 +57,7 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
     private lateinit var originLocation: Location
     private lateinit var destLocation: Place
     private lateinit var analytics: Analytics
+    private val routesRepository = RoutesRepository()
 
     private lateinit var getWeatherMetrics: Disposable
     private lateinit var getLocationOnMapReady: Disposable
@@ -238,7 +239,6 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
 
     private fun listenMyService(userId: String) {
 
-        val routesRepository = RoutesRepository()
         getDriverLocationUpdates = routesRepository.get(userId).subscribe { myRoute ->
             if (myRoute.status) {
                 routesRepository.getDriver(myRoute.drivername).subscribe { driverAssigned ->
@@ -371,6 +371,20 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
                 googleMap.setMapStyle(MapStyleOptions.loadRawResourceStyle(this, R.raw.map))
 
             listenLightSensor()
+        }
+    }
+
+    fun onServicePickedUp() {
+        routesRepository.getHistory(auth.currentUser?.uid!!).subscribe { history ->
+            val intent = Intent(this, HistoryActivity::class.java)
+            intent.putExtra("history_carefare", history.carfare)
+            intent.putExtra("history_destination_lat", history.destination_lat)
+            intent.putExtra("history_destination_lon", history.destination_lon)
+            intent.putExtra("history_origin_lat", history.origin_lat)
+            intent.putExtra("history_origin_lon", history.origin_lon)
+            intent.putExtra("history_service_id", history.service_id)
+
+            startActivity(intent)
         }
     }
 

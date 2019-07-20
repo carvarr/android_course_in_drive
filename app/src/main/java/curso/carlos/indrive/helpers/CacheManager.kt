@@ -2,7 +2,7 @@ package curso.carlos.indrive.helpers
 
 import android.content.Context
 import android.content.SharedPreferences
-import androidx.core.content.edit
+//import androidx.core.content.edit
 
 class CacheManager {
 
@@ -15,9 +15,10 @@ class CacheManager {
 
 
     fun setValue(key: String, value: String) {
-        prefs.edit {
+        prefs.edit().putString(key, value).apply()
+        /*prefs.edit {
             putString(key, value)
-        }
+        }*/
     }
 
     fun getValue(key: String): String {
