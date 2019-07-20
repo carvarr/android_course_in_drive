@@ -20,9 +20,11 @@ import android.support.v4.app.NotificationCompat
 import android.support.v4.app.NotificationManagerCompat
 import android.support.v4.content.ContextCompat
 import android.support.v7.app.AlertDialog
+import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
 import android.widget.EditText
+import com.crashlytics.android.Crashlytics
 import com.google.android.gms.maps.SupportMapFragment
 import com.google.firebase.auth.FirebaseAuth
 import curso.carlos.indrive.gateway.LoginActivity
@@ -59,6 +61,7 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
     private lateinit var getDriverLocationUpdates: Disposable
 
     private val REQUEST_ACCESS_PERMISSION = 1
+    private val CRASH_MAIN = "MainActivity"
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,8 +87,12 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
         // Firebase reference
         database = FirebaseDatabase.getInstance().reference
 
-        val mapFragment = supportFragmentManager.findFragmentById(R.id.map) as SupportMapFragment?
-        mapFragment!!.getMapAsync(mapService.onReadyMapCallback())
+        try{
+            val mapFragment = supportFragmentManager.findFragmentById(R.id.map) as SupportMapFragment?
+            mapFragment!!.getMapAsync(mapService.onReadyMapCallback())
+        } catch (ex: Exception) {
+            Crashlytics.log(Log.DEBUG, CRASH_MAIN, "sucedió un problema cargando el mapa");
+        }
 
         // Initialize the AutocompleteSupportFragment.
         val autocompleteFragment =
@@ -214,6 +221,8 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
                         "Failed Load Direction",
                         Toast.LENGTH_LONG
                     ).show()
+
+                    Crashlytics.log(Log.DEBUG, CRASH_MAIN, "sucedió un problema consumiendo directions");
                 }
                 .subscribe { polyline ->
                     connectPolyline(polyline)
@@ -267,11 +276,19 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
             originLocation.longitude.toString(),
             destLocation.latLng?.latitude.toString(),
             destLocation.latLng?.longitude.toString()
-        ).subscribe { polyline ->
+        ).doOnError {
+            Crashlytics.log(Log.DEBUG, CRASH_MAIN, "no se pudo obtener la polyline")
+        }
+         .subscribe { polyline ->
             mapService.paintPolyline(polyline)
         }
 
-        mapService.paintDriverIcon(driver, lat, lon)
+
+        try{
+            mapService.paintDriverIcon(driver, lat, lon)
+        } catch (ex: Exception) {
+            Crashlytics.log(Log.DEBUG, CRASH_MAIN, "no se pudo pintar la posición del conductor")
+        }
     }
 
 
@@ -405,6 +422,8 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
 
     override fun onError(status: Status) {
         Toast.makeText(applicationContext, "" + status.toString(), Toast.LENGTH_LONG).show()
+
+            Crashlytics.log(Log.DEBUG, CRASH_MAIN, "sucedió un problema cargando el listado de places");
     }
 
     inner class InDriveLocationListener() : LocationListener {
