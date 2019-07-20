@@ -34,7 +34,9 @@ import com.google.android.libraries.places.api.Places
 import com.google.android.libraries.places.api.model.Place
 import com.google.android.libraries.places.widget.AutocompleteSupportFragment
 import com.google.android.libraries.places.widget.listener.PlaceSelectionListener
+import com.google.firebase.analytics.FirebaseAnalytics
 import com.google.firebase.database.*
+import curso.carlos.indrive.helpers.Analytics
 import curso.carlos.indrive.helpers.DistanceManager
 import curso.carlos.indrive.repositories.RoutesRepository
 import curso.carlos.indrive.services.MapService
@@ -54,6 +56,7 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
     private lateinit var mapService: MapService
     private lateinit var originLocation: Location
     private lateinit var destLocation: Place
+    private lateinit var analytics: Analytics
 
     private lateinit var getWeatherMetrics: Disposable
     private lateinit var getLocationOnMapReady: Disposable
@@ -107,6 +110,8 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
         autocompleteFragment.setOnPlaceSelectedListener(this)
 
         getTemperatureOnLocation()
+
+        analytics = Analytics(this)
     }
 
     override fun onDestroy() {
@@ -204,6 +209,8 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
                     place.latLng?.latitude.toString(),
                     place.latLng?.longitude.toString()
                 )
+
+                analytics.reportRouteCreated()
             }
     }
 
@@ -244,12 +251,16 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
 
                         val getLocationOnDriverRoutePainted =
                             locationListener.locationUpdates.take(1).subscribe { userLocation ->
-                                notifyWhenDriverIsArriving(
-                                    driverAssigned.origin_lat.toDouble(),
+                                val distance = DistanceManager.calculateDistance(driverAssigned.origin_lat.toDouble(),
                                     driverAssigned.origin_long.toDouble(),
                                     userLocation.latitude,
-                                    userLocation.longitude
-                                )
+                                    userLocation.longitude)
+
+                                notifyWhenDriverIsArriving(distance)
+
+                                if(distance <= DistanceManager.LOWER_LIMIT_DISTANCE_METERS) {
+                                    analytics.driverArrived()
+                                }
                             }
                     }
                 }
@@ -304,13 +315,7 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
     }
 
 
-    private fun notifyWhenDriverIsArriving(
-        driverLat: Double,
-        driverLon: Double,
-        userLat: Double,
-        userLong: Double
-    ) {
-        val distance = DistanceManager.calculateDistance(driverLat, driverLon, userLat, userLong)
+    private fun notifyWhenDriverIsArriving(distance: Float) {
         if (distance <= DistanceManager.UPPER_LIMIT_DISTANCE_METERS) {
             var builder = NotificationCompat.Builder(this, "")
                 .setSmallIcon(R.drawable.ic_launcher_background)

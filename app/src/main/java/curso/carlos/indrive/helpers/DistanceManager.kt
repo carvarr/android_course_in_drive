@@ -7,6 +7,7 @@ class DistanceManager {
     companion object {
 
         const val UPPER_LIMIT_DISTANCE_METERS = 300
+        const val LOWER_LIMIT_DISTANCE_METERS = 50
 
         /**
          * calculate distance between two points
