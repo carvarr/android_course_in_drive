@@ -23,6 +23,8 @@ import android.support.v7.app.AlertDialog
 import android.util.Log
 import android.view.Menu
 import android.view.MenuItem
+import android.view.View
+import android.widget.Button
 import android.widget.EditText
 import com.crashlytics.android.Crashlytics
 import com.google.android.gms.maps.SupportMapFragment
@@ -58,6 +60,7 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
     private lateinit var destLocation: Place
     private lateinit var analytics: Analytics
     private val routesRepository = RoutesRepository()
+    private lateinit var moreInfoBtn: Button
 
     private lateinit var getWeatherMetrics: Disposable
     private lateinit var getLocationOnMapReady: Disposable
@@ -78,6 +81,9 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
             redirectToLogin()
             return
         }
+
+        moreInfoBtn = findViewById(R.id.historyBtn)
+        moreInfoBtn.setOnClickListener { onServicePickedUp() }
 
         getUserLocation()
 
@@ -113,6 +119,7 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
         getTemperatureOnLocation()
 
         analytics = Analytics(this)
+
     }
 
     override fun onDestroy() {
@@ -241,6 +248,10 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
 
         getDriverLocationUpdates = routesRepository.get(userId).subscribe { myRoute ->
             if (myRoute.status) {
+                if (moreInfoBtn.visibility == View.INVISIBLE) {
+                    moreInfoBtn.visibility = View.VISIBLE
+                }
+
                 routesRepository.getDriver(myRoute.drivername).subscribe { driverAssigned ->
                     if (driverAssigned != null) {
                         paintIcon(
@@ -275,6 +286,8 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
                 ).subscribe { polyline ->
                     connectPolyline(polyline)
                 }
+
+                moreInfoBtn.visibility = View.INVISIBLE
             }
         }
     }
