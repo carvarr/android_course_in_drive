@@ -7,15 +7,19 @@
     <LinearLayout
             android:orientation="horizontal"
             android:layout_width="match_parent"
+            android:layout_marginTop="20sp"
+            android:layout_marginBottom="20sp"
             android:layout_height="wrap_content">
 
         <TextView
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
+                android:textSize="20sp"
                 android:text="Service ID:" />
 
         <TextView
                 android:id="@+id/tv_service"
+                android:textSize="20sp"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content" />
 
@@ -24,14 +28,17 @@
     <LinearLayout
             android:orientation="horizontal"
             android:layout_width="match_parent"
+            android:layout_marginBottom="20sp"
             android:layout_height="wrap_content">
 
         <TextView
+                android:textSize="20sp"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Carfare:" />
 
         <TextView
+                android:textSize="20sp"
                 android:id="@+id/tv_carefare"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content" />
@@ -41,14 +48,17 @@
     <LinearLayout
             android:orientation="horizontal"
             android:layout_width="match_parent"
+            android:layout_marginBottom="20sp"
             android:layout_height="wrap_content">
 
         <TextView
+                android:textSize="20sp"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Origin (lat, lon):" />
 
         <TextView
+                android:textSize="20sp"
                 android:id="@+id/tv_origin"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content" />
@@ -61,11 +71,13 @@
             android:layout_height="wrap_content">
 
         <TextView
+                android:textSize="20sp"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Destination (lat, lon):" />
 
         <TextView
+                android:textSize="20sp"
                 android:id="@+id/tv_destination"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content" />

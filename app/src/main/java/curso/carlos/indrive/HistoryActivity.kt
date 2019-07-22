@@ -19,8 +19,8 @@ class HistoryActivity : AppCompatActivity() {
         val destination = findViewById<TextView>(R.id.tv_destination)
 
         service.text = intent.getStringExtra("history_service_id")
-        carefare.text = intent.getStringExtra("history_carefare")
-        origin.text = "${intent.getStringExtra("history_origin_lat")},${intent.getStringExtra("history_origin_lon")}"
-        destination.text = "${intent.getStringExtra("history_destination_lat")},${intent.getStringExtra("history_destination_lon")}"
+        carefare.text = intent.getIntExtra("history_carefare", 0).toString()
+        origin.text = "${intent.getStringExtra("history_origin_lat")}, ${intent.getStringExtra("history_origin_lon")}"
+        destination.text = "${intent.getStringExtra("history_destination_lat")}, ${intent.getStringExtra("history_destination_lon")}"
     }
 }

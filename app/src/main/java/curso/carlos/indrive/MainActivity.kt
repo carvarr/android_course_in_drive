@@ -165,7 +165,6 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
 
     private fun connectPolyline(polylines: List<LatLng>) {
         mapService.paintPolyline(polylines)
-        listenMyService(auth.currentUser!!.uid)
     }
 
     /**
@@ -241,6 +240,7 @@ class MainActivity : AppCompatActivity(), PlaceSelectionListener {
                 }
                 .subscribe { polyline ->
                     connectPolyline(polyline)
+                    listenMyService(auth.currentUser!!.uid)
                 }
     }
 
